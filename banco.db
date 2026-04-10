@@ -1,0 +1,31 @@
+-- Script SQL para PostgreSQL (Neon)
+-- Cole este conteudo no SQL Editor do Neon para criar o banco.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS fichas (
+  id UUID PRIMARY KEY,
+  data JSONB NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT ficha_data_objeto CHECK (jsonb_typeof(data) = 'object')
+);
+
+CREATE INDEX IF NOT EXISTS idx_fichas_updated_at ON fichas (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fichas_nome ON fichas ((COALESCE(data->>'nome', '')));
+
+CREATE OR REPLACE FUNCTION set_fichas_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_fichas_updated_at ON fichas;
+
+CREATE TRIGGER trg_fichas_updated_at
+BEFORE UPDATE ON fichas
+FOR EACH ROW
+EXECUTE FUNCTION set_fichas_updated_at();

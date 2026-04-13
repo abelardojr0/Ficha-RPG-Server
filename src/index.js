@@ -4,6 +4,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
 import { query } from "./db.js";
+import { compressCharacterImages } from "./image.js";
 import {
   isStrongEnoughPassword,
   isValidCharacterPayload,
@@ -13,6 +14,7 @@ dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const jsonLimit = process.env.JSON_LIMIT || "8mb";
 const corsOriginValue = process.env.CORS_ORIGIN?.trim() || "*";
 const allowedOrigins =
   corsOriginValue === "*"
@@ -34,7 +36,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: jsonLimit }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
@@ -86,7 +88,8 @@ app.post("/api/sheets", async (req, res) => {
 
     const id = crypto.randomUUID();
     const passwordHash = await bcrypt.hash(password, 12);
-    const characterWithId = { ...character, id };
+    const compressedCharacter = await compressCharacterImages(character);
+    const characterWithId = { ...compressedCharacter, id };
 
     await query(
       `INSERT INTO fichas (id, data, password_hash) VALUES ($1::uuid, $2::jsonb, $3)`,
@@ -175,7 +178,8 @@ app.put("/api/sheets/:id", async (req, res) => {
       return res.status(401).json({ message: "Senha incorreta." });
     }
 
-    const characterWithId = { ...character, id };
+    const compressedCharacter = await compressCharacterImages(character);
+    const characterWithId = { ...compressedCharacter, id };
 
     await query(`UPDATE fichas SET data = $2::jsonb WHERE id = $1::uuid`, [
       id,
@@ -195,6 +199,22 @@ app.put("/api/sheets/:id", async (req, res) => {
     console.error(error);
     return res.status(500).json({ message: "Falha ao salvar ficha." });
   }
+});
+
+app.use((error, _req, res, _next) => {
+  if (error?.type === "entity.too.large" || error?.status === 413) {
+    return res.status(413).json({
+      message:
+        "Payload muito grande. Reduza a imagem ou envie uma imagem com menor qualidade.",
+    });
+  }
+
+  if (error instanceof SyntaxError && "body" in error) {
+    return res.status(400).json({ message: "JSON invalido no corpo da requisicao." });
+  }
+
+  console.error(error);
+  return res.status(500).json({ message: "Erro interno do servidor." });
 });
 
 app.listen(port, () => {

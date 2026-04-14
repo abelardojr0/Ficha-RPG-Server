@@ -227,11 +227,13 @@ app.post("/api/sheets/:id/image", (req, res) => {
         return;
       }
 
-      const previousImageUrl = auth.sheet.data?.imagemUrl || "";
+      const previousImageUrl = getSheetImageUrl(auth.sheet.data);
       const nextImageUrl = buildPublicFileUrl(req, req.file.filename);
       const nextData = {
         ...(auth.sheet.data ?? {}),
         imagemUrl: nextImageUrl,
+        imageUrl: nextImageUrl,
+        fotoUrl: nextImageUrl,
       };
 
       await query(`UPDATE fichas SET data = $2::jsonb WHERE id = $1::uuid`, [
@@ -267,10 +269,13 @@ app.delete("/api/sheets/:id/image", async (req, res) => {
       return;
     }
 
-    const currentImageUrl = auth.sheet.data?.imagemUrl || "";
+    const currentImageUrl = getSheetImageUrl(auth.sheet.data);
 
     const nextData = { ...(auth.sheet.data ?? {}) };
     delete nextData.imagemUrl;
+    delete nextData.imageUrl;
+    delete nextData.fotoUrl;
+    delete nextData.foto;
 
     await query(`UPDATE fichas SET data = $2::jsonb WHERE id = $1::uuid`, [
       id,
@@ -390,9 +395,16 @@ app.put("/api/sheets/:id", async (req, res) => {
       return res.status(auth.status).json({ message: auth.message });
     }
 
-    const characterWithId = { ...character, id };
-    const previousImageUrl = auth.sheet.data?.imagemUrl || "";
-    const nextImageUrl = characterWithId.imagemUrl || "";
+    const previousImageUrl = getSheetImageUrl(auth.sheet.data);
+    const nextImageUrlFromPayload = getSheetImageUrl(character);
+    const nextImageUrl = nextImageUrlFromPayload || previousImageUrl;
+    const characterWithId = {
+      ...character,
+      id,
+      imagemUrl: nextImageUrl,
+      imageUrl: nextImageUrl,
+      fotoUrl: nextImageUrl,
+    };
 
     await query(`UPDATE fichas SET data = $2::jsonb WHERE id = $1::uuid`, [
       id,

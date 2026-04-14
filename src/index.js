@@ -118,14 +118,23 @@ const buildPublicFileUrl = (req, filename) => {
   return `${protocol}://${host}/uploads/${filename}`;
 };
 
-const buildSheetSummary = ({ id, data, updatedAt }) => ({
-  id: String(id),
-  nome: data?.nome || "Sem nome",
-  nivel: data?.nivel || "",
-  jogador: data?.jogador || "",
-  imagemUrl: data?.imagemUrl || data?.imageUrl || "",
-  updatedAt: updatedAt || new Date().toISOString(),
-});
+const getSheetImageUrl = (data) =>
+  data?.imagemUrl || data?.imageUrl || data?.fotoUrl || data?.foto || "";
+
+const buildSheetSummary = ({ id, data, updatedAt }) => {
+  const imagemUrl = getSheetImageUrl(data);
+
+  return {
+    id: String(id),
+    nome: data?.nome || "Sem nome",
+    nivel: data?.nivel || "",
+    jogador: data?.jogador || "",
+    imagemUrl,
+    imageUrl: imagemUrl,
+    fotoUrl: imagemUrl,
+    updatedAt: updatedAt || new Date().toISOString(),
+  };
+};
 
 const corsOriginValue = process.env.CORS_ORIGIN?.trim() || "*";
 const allowedOrigins =

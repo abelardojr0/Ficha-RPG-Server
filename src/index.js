@@ -254,6 +254,31 @@ app.get("/api/sheets/:id/image", async (req, res) => {
   }
 });
 
+app.delete("/api/sheets/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { password } = req.body ?? {};
+
+    const auth = await assertSheetAuth(id, password);
+    if (!auth.ok) {
+      return res.status(auth.status).json({ message: auth.message });
+    }
+
+    const imageUrl = getSheetImageUrl(auth.sheet.data);
+
+    await query(`DELETE FROM fichas WHERE id = $1::uuid`, [id]);
+
+    if (imageUrl) {
+      deleteLocalUploadByUrl(imageUrl);
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Falha ao excluir ficha." });
+  }
+});
+
 const getSheetById = async (id) => {
   const { rows } = await query(
     `SELECT id::text AS id, data, password_hash FROM fichas WHERE id = $1::uuid LIMIT 1`,

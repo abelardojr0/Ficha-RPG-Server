@@ -102,10 +102,10 @@ const deleteLocalUploadByUrl = (urlValue) => {
   fs.rm(filePath, { force: true }, () => {});
 };
 
-const buildPublicFileUrl = (req, filename) => {
+const getRequestBaseUrl = (req) => {
   const publicBaseUrl = process.env.PUBLIC_BASE_URL?.trim();
   if (publicBaseUrl) {
-    return `${publicBaseUrl.replace(/\/$/, "")}/uploads/${filename}`;
+    return publicBaseUrl.replace(/\/$/, "");
   }
 
   const forwardedProto = req.headers["x-forwarded-proto"];
@@ -115,14 +115,42 @@ const buildPublicFileUrl = (req, filename) => {
       : req.protocol;
   const host = req.get("host");
 
-  return `${protocol}://${host}/uploads/${filename}`;
+  return `${protocol}://${host}`;
+};
+
+const buildPublicFileUrl = (req, filename) => {
+  return `${getRequestBaseUrl(req)}/uploads/${filename}`;
+};
+
+const buildSheetImageUrl = (req, id) => {
+  return `${getRequestBaseUrl(req)}/api/sheets/${id}/image`;
 };
 
 const getSheetImageUrl = (data) =>
   data?.imagemUrl || data?.imageUrl || data?.fotoUrl || data?.foto || "";
 
-const buildSheetSummary = ({ id, data, updatedAt }) => {
-  const imagemUrl = getSheetImageUrl(data);
+const buildImageViewUrl = ({ req, id, data }) => {
+  const rawImageValue = getSheetImageUrl(data);
+  if (!rawImageValue) {
+    return "";
+  }
+
+  return buildSheetImageUrl(req, id);
+};
+
+const buildCharacterForResponse = ({ req, id, data }) => {
+  const imagemUrl = buildImageViewUrl({ req, id, data });
+
+  return {
+    ...(data ?? {}),
+    imagemUrl,
+    imageUrl: imagemUrl,
+    fotoUrl: imagemUrl,
+  };
+};
+
+const buildSheetSummary = ({ req, id, data, updatedAt }) => {
+  const imagemUrl = buildImageViewUrl({ req, id, data });
 
   return {
     id: String(id),
@@ -163,6 +191,67 @@ app.use("/uploads", express.static(uploadsDir));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.get("/api/sheets/:id/image", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sheet = await getSheetById(id);
+
+    if (!sheet) {
+      res.status(404).json({ message: "Ficha nao encontrada." });
+      return;
+    }
+
+    const imageSource = getSheetImageUrl(sheet.data);
+    if (!imageSource) {
+      res.status(404).json({ message: "Imagem nao encontrada." });
+      return;
+    }
+
+    if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(imageSource)) {
+      const [metadata, base64Payload] = imageSource.split(",", 2);
+      const mimeMatch = /^data:(image\/[a-zA-Z0-9.+-]+);base64$/.exec(metadata);
+
+      if (!mimeMatch || !base64Payload) {
+        res.status(400).json({ message: "Formato de imagem invalido." });
+        return;
+      }
+
+      const imageBuffer = Buffer.from(base64Payload, "base64");
+      res.setHeader("Content-Type", mimeMatch[1]);
+      res.setHeader("Cache-Control", "public, max-age=300");
+      res.send(imageBuffer);
+      return;
+    }
+
+    const localFilename = getLocalUploadFilenameFromUrl(imageSource);
+    if (localFilename) {
+      const filePath = path.resolve(uploadsDir, localFilename);
+      if (!filePath.startsWith(uploadsDir)) {
+        res.status(400).json({ message: "Caminho de imagem invalido." });
+        return;
+      }
+
+      if (!fs.existsSync(filePath)) {
+        res.status(404).json({ message: "Arquivo de imagem nao encontrado." });
+        return;
+      }
+
+      res.sendFile(filePath);
+      return;
+    }
+
+    if (/^https?:\/\//i.test(imageSource)) {
+      res.redirect(302, imageSource);
+      return;
+    }
+
+    res.status(400).json({ message: "Referencia de imagem invalida." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Falha ao carregar imagem da ficha." });
+  }
 });
 
 const getSheetById = async (id) => {
@@ -308,6 +397,7 @@ app.get("/api/sheets", async (_req, res) => {
 
     const sheets = rows.map((row) =>
       buildSheetSummary({
+        req: _req,
         id: row.id,
         data: row.data,
         updatedAt: row.updated_at,
@@ -345,6 +435,7 @@ app.post("/api/sheets", async (req, res) => {
     );
 
     const summary = buildSheetSummary({
+      req,
       id,
       data: characterWithId,
     });
@@ -369,8 +460,13 @@ app.post("/api/sheets/:id/unlock", async (req, res) => {
     const sheet = auth.sheet;
 
     return res.json({
-      character: sheet.data,
+      character: buildCharacterForResponse({
+        req,
+        id: sheet.id,
+        data: sheet.data,
+      }),
       summary: buildSheetSummary({
+        req,
         id: sheet.id,
         data: sheet.data,
       }),
@@ -417,6 +513,7 @@ app.put("/api/sheets/:id", async (req, res) => {
 
     return res.json({
       summary: buildSheetSummary({
+        req,
         id,
         data: characterWithId,
       }),

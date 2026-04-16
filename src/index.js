@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import express from "express";
 import multer from "multer";
 import { query } from "./db.js";
+import { compressCharacterImages } from "./image.js";
 import {
   isStrongEnoughPassword,
   isValidCharacterPayload,
@@ -17,6 +18,7 @@ dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "12mb";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const uploadsDir = path.resolve(__dirname, "../uploads");
@@ -186,7 +188,7 @@ const corsOptions = {
 
 app.set("trust proxy", true);
 app.use(cors(corsOptions));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: requestBodyLimit }));
 app.use("/uploads", express.static(uploadsDir));
 
 app.get("/api/health", (_req, res) => {
@@ -450,9 +452,10 @@ app.post("/api/sheets", async (req, res) => {
       return res.status(400).json({ message: "Payload da ficha invalido." });
     }
 
+    const compressedCharacter = await compressCharacterImages(character);
     const id = crypto.randomUUID();
     const passwordHash = await bcrypt.hash(password, 12);
-    const characterWithId = { ...character, id };
+    const characterWithId = { ...compressedCharacter, id };
 
     await query(
       `INSERT INTO fichas (id, data, password_hash) VALUES ($1::uuid, $2::jsonb, $3)`,
@@ -516,11 +519,12 @@ app.put("/api/sheets/:id", async (req, res) => {
       return res.status(auth.status).json({ message: auth.message });
     }
 
+    const compressedCharacter = await compressCharacterImages(character);
     const previousImageUrl = getSheetImageUrl(auth.sheet.data);
-    const nextImageUrlFromPayload = getSheetImageUrl(character);
+    const nextImageUrlFromPayload = getSheetImageUrl(compressedCharacter);
     const nextImageUrl = nextImageUrlFromPayload || previousImageUrl;
     const characterWithId = {
-      ...character,
+      ...compressedCharacter,
       id,
       imagemUrl: nextImageUrl,
       imageUrl: nextImageUrl,
@@ -551,4 +555,16 @@ app.put("/api/sheets/:id", async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Servidor backend ativo na porta ${port}`);
+});
+
+app.use((error, _req, res, next) => {
+  if (error?.type === "entity.too.large") {
+    res.status(413).json({
+      message:
+        "Payload muito grande. Tente enviar uma imagem menor ou comprima antes do envio.",
+    });
+    return;
+  }
+
+  next(error);
 });

@@ -29,9 +29,16 @@ export const ensureDatabaseSchema = async () => {
     CREATE TABLE IF NOT EXISTS grupos (
       id UUID PRIMARY KEY,
       nome TEXT NOT NULL,
+      image_url TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+
+  await query(
+    `ALTER TABLE grupos ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT ''`,
+  );
+
+  await query(`UPDATE grupos SET image_url = '' WHERE image_url IS NULL`);
 
   await query(`
     CREATE UNIQUE INDEX IF NOT EXISTS grupos_nome_lower_unique_idx
@@ -98,4 +105,21 @@ export const ensureDatabaseSchema = async () => {
   `);
 
   await query(`ALTER TABLE fichas ALTER COLUMN grupo_id SET NOT NULL`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS grupo_arquivos (
+      id UUID PRIMARY KEY,
+      grupo_id UUID NOT NULL REFERENCES grupos(id) ON DELETE CASCADE,
+      original_name TEXT NOT NULL,
+      file_url TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS grupo_arquivos_grupo_id_idx
+    ON grupo_arquivos (grupo_id)
+  `);
 };

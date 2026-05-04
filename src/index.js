@@ -128,8 +128,24 @@ const buildSheetImageUrl = (req, id) => {
   return `${getRequestBaseUrl(req)}/api/sheets/${id}/image`;
 };
 
-const getSheetImageUrl = (data) =>
-  data?.imagemUrl || data?.imageUrl || data?.fotoUrl || data?.foto || "";
+const normalizeImageValue = (value) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.trim();
+  return normalized;
+};
+
+const getSheetImageUrl = (data) => {
+  return (
+    normalizeImageValue(data?.imagemUrl) ||
+    normalizeImageValue(data?.imageUrl) ||
+    normalizeImageValue(data?.fotoUrl) ||
+    normalizeImageValue(data?.foto) ||
+    ""
+  );
+};
 
 const buildImageViewUrl = ({ req, id, data }) => {
   const rawImageValue = getSheetImageUrl(data);

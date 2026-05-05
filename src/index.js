@@ -52,13 +52,33 @@ const CLOUDINARY_UPLOAD_PRESET =
 const CLOUDINARY_UPLOAD_FOLDER =
   process.env.CLOUDINARY_UPLOAD_FOLDER?.trim() || "";
 
+const normalizeCloudinaryUrl = (value) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  // Accept values copied as "CLOUDINARY_URL=cloudinary://..."
+  const withoutPrefix = value.replace(/^\s*CLOUDINARY_URL\s*=\s*/i, "");
+  return withoutPrefix.replace(/^['"]|['"]$/g, "").trim();
+};
+
+const getUploadFailureMessage = (error, fallbackMessage) => {
+  const detail = typeof error?.message === "string" ? error.message.trim() : "";
+  if (!detail) {
+    return fallbackMessage;
+  }
+
+  return `${fallbackMessage} ${detail}`;
+};
+
 const getCloudinaryCredentialsFromUrl = () => {
-  if (!CLOUDINARY_URL) {
+  const normalizedCloudinaryUrl = normalizeCloudinaryUrl(CLOUDINARY_URL);
+  if (!normalizedCloudinaryUrl) {
     return null;
   }
 
   try {
-    const parsed = new URL(CLOUDINARY_URL);
+    const parsed = new URL(normalizedCloudinaryUrl);
     const apiKey = decodeURIComponent(parsed.username || "").trim();
     const apiSecret = decodeURIComponent(parsed.password || "").trim();
     const cloudName = decodeURIComponent(parsed.hostname || "").trim();
@@ -716,7 +736,12 @@ app.post("/api/groups/:id/image", (req, res) => {
 
     processUpload().catch((uploadProcessError) => {
       console.error(uploadProcessError);
-      res.status(500).json({ message: "Falha ao salvar imagem do grupo." });
+      res.status(500).json({
+        message: getUploadFailureMessage(
+          uploadProcessError,
+          "Falha ao salvar imagem do grupo.",
+        ),
+      });
     });
   });
 });
@@ -1169,7 +1194,12 @@ app.post("/api/sheets/:id/image", (req, res) => {
 
     processUpload().catch((uploadProcessError) => {
       console.error(uploadProcessError);
-      res.status(500).json({ message: "Falha ao salvar imagem da ficha." });
+      res.status(500).json({
+        message: getUploadFailureMessage(
+          uploadProcessError,
+          "Falha ao salvar imagem da ficha.",
+        ),
+      });
     });
   });
 });

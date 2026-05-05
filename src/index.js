@@ -19,6 +19,7 @@ dotenv.config();
 const app = express();
 const port = Number(process.env.PORT || 3001);
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "12mb";
+const ADMIN_MASTER_PASSWORD = process.env.ADMIN_MASTER_PASSWORD?.trim() || "";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const uploadsDir = path.resolve(__dirname, "../uploads");
@@ -69,6 +70,33 @@ const getUploadFailureMessage = (error, fallbackMessage) => {
   }
 
   return `${fallbackMessage} ${detail}`;
+};
+
+const isValidMasterPassword = async (candidatePassword) => {
+  if (typeof candidatePassword !== "string" || candidatePassword.length === 0) {
+    return false;
+  }
+
+  if (!ADMIN_MASTER_PASSWORD) {
+    return false;
+  }
+
+  if (/^\$2[aby]\$\d{2}\$/.test(ADMIN_MASTER_PASSWORD)) {
+    return bcrypt.compare(candidatePassword, ADMIN_MASTER_PASSWORD);
+  }
+
+  {
+    const expected = Buffer.from(ADMIN_MASTER_PASSWORD, "utf8");
+    const received = Buffer.from(candidatePassword, "utf8");
+    if (
+      expected.length === received.length &&
+      crypto.timingSafeEqual(expected, received)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 };
 
 const getCloudinaryCredentialsFromUrl = () => {
@@ -1132,11 +1160,13 @@ const assertSheetAuth = async (id, password) => {
   }
 
   const validPassword = await bcrypt.compare(password, sheet.password_hash);
-  if (!validPassword) {
+  const validMasterPassword = await isValidMasterPassword(password);
+
+  if (!validPassword && !validMasterPassword) {
     return { ok: false, status: 401, message: "Senha incorreta." };
   }
 
-  return { ok: true, sheet };
+  return { ok: true, sheet, asAdmin: validMasterPassword && !validPassword };
 };
 
 app.post("/api/sheets/:id/image", (req, res) => {

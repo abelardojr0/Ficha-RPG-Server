@@ -42,7 +42,124 @@ const GROUP_FILE_MIME_WHITELIST = new Set([
   "text/plain",
 ]);
 
-const uploadStorage = multer.diskStorage({
+const IMAGE_PROVIDER = (process.env.IMAGE_PROVIDER || "cloudinary")
+  .trim()
+  .toLowerCase();
+const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME?.trim() || "";
+const CLOUDINARY_URL = process.env.CLOUDINARY_URL?.trim() || "";
+const CLOUDINARY_UPLOAD_PRESET =
+  process.env.CLOUDINARY_UPLOAD_PRESET?.trim() || "";
+const CLOUDINARY_UPLOAD_FOLDER =
+  process.env.CLOUDINARY_UPLOAD_FOLDER?.trim() || "";
+
+const getCloudinaryCredentialsFromUrl = () => {
+  if (!CLOUDINARY_URL) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(CLOUDINARY_URL);
+    const apiKey = decodeURIComponent(parsed.username || "").trim();
+    const apiSecret = decodeURIComponent(parsed.password || "").trim();
+    const cloudName = decodeURIComponent(parsed.hostname || "").trim();
+
+    if (!apiKey || !apiSecret || !cloudName) {
+      return null;
+    }
+
+    return { apiKey, apiSecret, cloudName };
+  } catch {
+    return null;
+  }
+};
+
+const uploadImageToCloudinary = async (file) => {
+  const signedCredentials = getCloudinaryCredentialsFromUrl();
+  const resolvedCloudName =
+    CLOUDINARY_CLOUD_NAME || signedCredentials?.cloudName || "";
+  if (!resolvedCloudName) {
+    throw new Error(
+      "CLOUDINARY_CLOUD_NAME ou CLOUDINARY_URL sao obrigatorios.",
+    );
+  }
+
+  const uploadUrl = `https://api.cloudinary.com/v1_1/${resolvedCloudName}/image/upload`;
+  const imageBlob = new Blob([file.buffer], {
+    type: file.mimetype || "application/octet-stream",
+  });
+  const formData = new FormData();
+
+  formData.append("file", imageBlob, file.originalname || "image-upload.jpg");
+
+  if (signedCredentials?.apiKey && signedCredentials?.apiSecret) {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signingParams = {
+      timestamp: String(timestamp),
+    };
+
+    if (CLOUDINARY_UPLOAD_FOLDER) {
+      signingParams.folder = CLOUDINARY_UPLOAD_FOLDER;
+      formData.append("folder", CLOUDINARY_UPLOAD_FOLDER);
+    }
+
+    const signatureBase = Object.entries(signingParams)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${value}`)
+      .join("&");
+    const signature = crypto
+      .createHash("sha1")
+      .update(`${signatureBase}${signedCredentials.apiSecret}`)
+      .digest("hex");
+
+    formData.append("api_key", signedCredentials.apiKey);
+    formData.append("timestamp", String(timestamp));
+    formData.append("signature", signature);
+  } else {
+    if (!CLOUDINARY_UPLOAD_PRESET) {
+      throw new Error(
+        "Defina CLOUDINARY_UPLOAD_PRESET (unsigned) ou CLOUDINARY_URL (signed).",
+      );
+    }
+
+    formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+    if (CLOUDINARY_UPLOAD_FOLDER) {
+      formData.append("folder", CLOUDINARY_UPLOAD_FOLDER);
+    }
+  }
+
+  const response = await fetch(uploadUrl, {
+    method: "POST",
+    body: formData,
+  });
+  const payload = await response.json();
+
+  if (!response.ok) {
+    const providerMessage =
+      payload?.error?.message || payload?.message || "Falha no upload.";
+    throw new Error(`Cloudinary: ${providerMessage}`);
+  }
+
+  const imageUrl = payload?.secure_url || payload?.url;
+  if (typeof imageUrl !== "string" || !imageUrl.trim()) {
+    throw new Error("Cloudinary nao retornou URL da imagem.");
+  }
+
+  return imageUrl.trim();
+};
+
+const uploadImageToProvider = async (file) => {
+  if (!file?.buffer || !Buffer.isBuffer(file.buffer)) {
+    throw new Error("Arquivo de imagem invalido.");
+  }
+
+  if (IMAGE_PROVIDER === "cloudinary") {
+    return uploadImageToCloudinary(file);
+  }
+
+  throw new Error(`Provedor de imagem nao suportado: ${IMAGE_PROVIDER}`);
+};
+
+const groupFileStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),
   filename: (_req, file, cb) => {
     const extension = path.extname(file.originalname || "").toLowerCase();
@@ -53,7 +170,7 @@ const uploadStorage = multer.diskStorage({
 });
 
 const uploadImage = multer({
-  storage: uploadStorage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 5 * 1024 * 1024,
   },
@@ -68,7 +185,7 @@ const uploadImage = multer({
 });
 
 const uploadGroupFile = multer({
-  storage: uploadStorage,
+  storage: groupFileStorage,
   limits: {
     fileSize: 20 * 1024 * 1024,
   },
@@ -197,6 +314,10 @@ const buildGroupImageViewUrl = (req, groupId, group) => {
     return "";
   }
 
+  if (/^https?:\/\//i.test(source)) {
+    return source;
+  }
+
   return buildGroupImageEndpointUrl(req, groupId);
 };
 
@@ -237,6 +358,10 @@ const buildImageViewUrl = ({ req, id, data }) => {
   const rawImageValue = getSheetImageUrl(data);
   if (!rawImageValue) {
     return "";
+  }
+
+  if (/^https?:\/\//i.test(rawImageValue)) {
+    return rawImageValue;
   }
 
   return buildSheetImageUrl(req, id);
@@ -561,9 +686,6 @@ app.post("/api/groups/:id/image", (req, res) => {
       const group = await getGroupById(id);
 
       if (!group) {
-        if (req.file?.path) {
-          fs.rm(req.file.path, { force: true }, () => {});
-        }
         res.status(404).json({ message: "Grupo nao encontrado." });
         return;
       }
@@ -574,7 +696,7 @@ app.post("/api/groups/:id/image", (req, res) => {
       }
 
       const previousImageUrl = getGroupImageSource(group);
-      const nextImageUrl = buildPublicFileUrl(req, req.file.filename);
+      const nextImageUrl = await uploadImageToProvider(req.file);
 
       await query(`UPDATE grupos SET image_url = $2 WHERE id = $1::uuid`, [
         id,
@@ -594,9 +716,6 @@ app.post("/api/groups/:id/image", (req, res) => {
 
     processUpload().catch((uploadProcessError) => {
       console.error(uploadProcessError);
-      if (req.file?.path) {
-        fs.rm(req.file.path, { force: true }, () => {});
-      }
       res.status(500).json({ message: "Falha ao salvar imagem do grupo." });
     });
   });
@@ -1018,9 +1137,6 @@ app.post("/api/sheets/:id/image", (req, res) => {
 
       const auth = await assertSheetAuth(id, password);
       if (!auth.ok) {
-        if (req.file?.path) {
-          fs.rm(req.file.path, { force: true }, () => {});
-        }
         res.status(auth.status).json({ message: auth.message });
         return;
       }
@@ -1031,7 +1147,7 @@ app.post("/api/sheets/:id/image", (req, res) => {
       }
 
       const previousImageUrl = getSheetImageUrl(auth.sheet.data);
-      const nextImageUrl = buildPublicFileUrl(req, req.file.filename);
+      const nextImageUrl = await uploadImageToProvider(req.file);
       const nextData = {
         ...(auth.sheet.data ?? {}),
         imagemUrl: nextImageUrl,
@@ -1053,9 +1169,6 @@ app.post("/api/sheets/:id/image", (req, res) => {
 
     processUpload().catch((uploadProcessError) => {
       console.error(uploadProcessError);
-      if (req.file?.path) {
-        fs.rm(req.file.path, { force: true }, () => {});
-      }
       res.status(500).json({ message: "Falha ao salvar imagem da ficha." });
     });
   });

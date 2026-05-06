@@ -740,6 +740,40 @@ app.patch("/api/groups/:id", async (req, res) => {
   }
 });
 
+app.post("/api/groups/:id/unlock", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { password } = req.body ?? {};
+
+    const group = await getGroupById(id);
+    if (!group) {
+      return res.status(404).json({ message: "Grupo nao encontrado." });
+    }
+
+    if (!hasGroupPassword(group)) {
+      return res.json({ ok: true });
+    }
+
+    if (typeof password === "string" && password.length > 0) {
+      if (await isValidMasterPassword(password)) {
+        return res.json({ ok: true });
+      }
+
+      const hash = group.password_hash ?? "";
+      if (hash && (await bcrypt.compare(password, hash))) {
+        return res.json({ ok: true });
+      }
+    }
+
+    return res.status(401).json({ message: "Senha incorreta." });
+  } catch (error) {
+    console.error(error);
+    return res
+      .status(500)
+      .json({ message: "Falha ao verificar senha do grupo." });
+  }
+});
+
 app.get("/api/groups/:id/image", async (req, res) => {
   try {
     const { id } = req.params;

@@ -29,10 +29,26 @@ export const ensureDatabaseSchema = async () => {
     CREATE TABLE IF NOT EXISTS grupos (
       id UUID PRIMARY KEY,
       nome TEXT NOT NULL,
+      descricao TEXT NOT NULL DEFAULT '',
+      password_hash TEXT NOT NULL DEFAULT '',
       image_url TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+
+  await query(
+    `ALTER TABLE grupos ADD COLUMN IF NOT EXISTS descricao TEXT NOT NULL DEFAULT ''`,
+  );
+
+  await query(
+    `ALTER TABLE grupos ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT ''`,
+  );
+
+  await query(`UPDATE grupos SET descricao = '' WHERE descricao IS NULL`);
+
+  await query(
+    `UPDATE grupos SET password_hash = '' WHERE password_hash IS NULL`,
+  );
 
   await query(
     `ALTER TABLE grupos ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT ''`,

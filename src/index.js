@@ -350,6 +350,20 @@ const normalizeGroupName = (value) => {
   return value.trim();
 };
 
+const normalizeGroupDescription = (value) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim();
+};
+
+const hasGroupPassword = (group) => {
+  const hash =
+    typeof group?.password_hash === "string" ? group.password_hash : "";
+  return hash.trim().length > 0;
+};
+
 const getGroupImageSource = (group) => {
   return normalizeImageValue(
     group?.image_url || group?.imagemUrl || group?.imageUrl,
@@ -376,6 +390,13 @@ const buildGroupSummary = ({ req, group }) => {
   return {
     id: group.id,
     nome: group.nome,
+    descricao: normalizeGroupDescription(
+      group?.descricao || group?.description,
+    ),
+    description: normalizeGroupDescription(
+      group?.descricao || group?.description,
+    ),
+    hasPassword: hasGroupPassword(group),
     imagemUrl: imageUrl,
     imagemViewUrl: imageViewUrl,
     imageUrl: imageViewUrl,
@@ -457,20 +478,20 @@ const getOrCreateGroupByName = async (groupName) => {
   const { rows } = await query(
     `
     WITH existing AS (
-      SELECT id, nome
+      SELECT id, nome, descricao, password_hash
       FROM grupos
       WHERE LOWER(nome) = LOWER($1)
       LIMIT 1
     ),
     inserted AS (
-      INSERT INTO grupos (id, nome)
-      SELECT $2::uuid, $1
+      INSERT INTO grupos (id, nome, descricao, password_hash)
+      SELECT $2::uuid, $1, '', ''
       WHERE NOT EXISTS (SELECT 1 FROM existing)
-      RETURNING id, nome
+      RETURNING id, nome, descricao, password_hash
     )
-    SELECT id::text AS id, nome FROM inserted
+    SELECT id::text AS id, nome, descricao, password_hash FROM inserted
     UNION ALL
-    SELECT id::text AS id, nome FROM existing
+    SELECT id::text AS id, nome, descricao, password_hash FROM existing
     LIMIT 1
     `,
     [normalizedGroupName, nextGroupId],
@@ -485,6 +506,8 @@ const listGroupsWithSheetCounts = async () => {
     SELECT
       g.id::text AS id,
       g.nome,
+      g.descricao,
+      g.password_hash,
       g.image_url,
       COUNT(f.id)::int AS sheet_count,
       (
@@ -494,7 +517,7 @@ const listGroupsWithSheetCounts = async () => {
       ) AS attachment_count
     FROM grupos g
     LEFT JOIN fichas f ON f.grupo_id = g.id
-    GROUP BY g.id, g.nome, g.image_url
+    GROUP BY g.id, g.nome, g.descricao, g.password_hash, g.image_url
     ORDER BY LOWER(g.nome) ASC
     `,
   );
@@ -526,7 +549,7 @@ const listGroupFiles = async (groupId) => {
 const getGroupById = async (id) => {
   const { rows } = await query(
     `
-    SELECT g.id::text AS id, g.nome, g.image_url
+    SELECT g.id::text AS id, g.nome, g.descricao, g.password_hash, g.image_url
     FROM grupos g
     WHERE g.id = $1::uuid
     LIMIT 1
@@ -582,12 +605,41 @@ app.get("/api/groups", async (_req, res) => {
 app.post("/api/groups", async (req, res) => {
   try {
     const nome = normalizeGroupName(req.body?.nome);
+    const hasDescriptionInput = typeof req.body?.descricao === "string";
+    const descricao = normalizeGroupDescription(req.body?.descricao);
+    const senha =
+      typeof req.body?.senha === "string" ? req.body.senha.trim() : "";
+    const passwordHash = senha ? await bcrypt.hash(senha, 12) : "";
+
     if (!nome) {
       res.status(400).json({ message: "Nome do grupo obrigatorio." });
       return;
     }
 
     const group = await getOrCreateGroupByName(nome);
+
+    if (hasDescriptionInput || passwordHash) {
+      const updates = [];
+      const params = [group.id];
+
+      if (hasDescriptionInput) {
+        updates.push(`descricao = $${params.length + 1}`);
+        params.push(descricao);
+      }
+
+      if (passwordHash) {
+        updates.push(`password_hash = $${params.length + 1}`);
+        params.push(passwordHash);
+      }
+
+      if (updates.length > 0) {
+        await query(
+          `UPDATE grupos SET ${updates.join(", ")} WHERE id = $1::uuid`,
+          params,
+        );
+      }
+    }
+
     const groups = await listGroupsWithSheetCounts();
     const groupSummary = groups.find((item) => item.id === group.id);
 
@@ -604,6 +656,12 @@ app.patch("/api/groups/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const nome = normalizeGroupName(req.body?.nome);
+    const hasDescriptionInput = typeof req.body?.descricao === "string";
+    const descricao = normalizeGroupDescription(req.body?.descricao);
+    const senha =
+      typeof req.body?.senha === "string" ? req.body.senha.trim() : "";
+    const removerSenha = req.body?.removerSenha === true;
+    const passwordHash = senha ? await bcrypt.hash(senha, 12) : "";
 
     if (!nome) {
       res.status(400).json({ message: "Nome do grupo obrigatorio." });
@@ -617,10 +675,29 @@ app.patch("/api/groups/:id", async (req, res) => {
     }
 
     try {
-      await query(`UPDATE grupos SET nome = $2 WHERE id = $1::uuid`, [
-        id,
-        nome,
-      ]);
+      await query(
+        `
+        UPDATE grupos
+        SET
+          nome = $2,
+          descricao = $3,
+          password_hash = CASE
+            WHEN $5::boolean THEN ''
+            WHEN $4::text <> '' THEN $4
+            ELSE password_hash
+          END
+        WHERE id = $1::uuid
+        `,
+        [
+          id,
+          nome,
+          hasDescriptionInput
+            ? descricao
+            : normalizeGroupDescription(existingGroup.descricao),
+          passwordHash,
+          removerSenha,
+        ],
+      );
     } catch (dbError) {
       if (dbError?.code === "23505") {
         res.status(409).json({ message: "Ja existe um grupo com esse nome." });
@@ -643,7 +720,19 @@ app.patch("/api/groups/:id", async (req, res) => {
     const group = groups.find((item) => item.id === id);
 
     res.status(200).json({
-      group: buildGroupSummary({ req, group: group || { id, nome } }),
+      group: buildGroupSummary({
+        req,
+        group: group || {
+          id,
+          nome,
+          descricao: hasDescriptionInput
+            ? descricao
+            : normalizeGroupDescription(existingGroup.descricao),
+          password_hash: removerSenha
+            ? ""
+            : passwordHash || existingGroup.password_hash,
+        },
+      }),
     });
   } catch (error) {
     console.error(error);

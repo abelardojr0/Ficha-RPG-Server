@@ -392,6 +392,14 @@ const normalizeGroupDescription = (value) => {
   return value.trim();
 };
 
+const normalizeGroupNotesHtml = (value) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.slice(0, 250000);
+};
+
 const hasGroupPassword = (group) => {
   const hash =
     typeof group?.password_hash === "string" ? group.password_hash : "";
@@ -585,7 +593,7 @@ const listGroupFiles = async (groupId) => {
 const getGroupById = async (id) => {
   const { rows } = await query(
     `
-    SELECT g.id::text AS id, g.nome, g.descricao, g.password_hash, g.image_url
+    SELECT g.id::text AS id, g.nome, g.descricao, g.password_hash, g.image_url, g.notes_html
     FROM grupos g
     WHERE g.id = $1::uuid
     LIMIT 1
@@ -807,6 +815,53 @@ app.post("/api/groups/:id/unlock", async (req, res) => {
     return res
       .status(500)
       .json({ message: "Falha ao verificar senha do grupo." });
+  }
+});
+
+app.get("/api/groups/:id/notes", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const group = await getGroupById(id);
+
+    if (!group) {
+      res.status(404).json({ message: "Grupo nao encontrado." });
+      return;
+    }
+
+    res.status(200).json({
+      html: normalizeGroupNotesHtml(group.notes_html),
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Falha ao carregar notas do grupo." });
+  }
+});
+
+app.patch("/api/groups/:id/notes", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const group = await getGroupById(id);
+
+    if (!group) {
+      res.status(404).json({ message: "Grupo nao encontrado." });
+      return;
+    }
+
+    const html = normalizeGroupNotesHtml(req.body?.html);
+
+    await query(`UPDATE grupos SET notes_html = $2 WHERE id = $1::uuid`, [
+      id,
+      html,
+    ]);
+
+    res.status(200).json({
+      html,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Falha ao salvar notas do grupo." });
   }
 });
 

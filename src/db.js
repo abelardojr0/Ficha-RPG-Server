@@ -32,6 +32,7 @@ export const ensureDatabaseSchema = async () => {
       descricao TEXT NOT NULL DEFAULT '',
       password_hash TEXT NOT NULL DEFAULT '',
       image_url TEXT NOT NULL DEFAULT '',
+      notes_html TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
@@ -55,6 +56,12 @@ export const ensureDatabaseSchema = async () => {
   );
 
   await query(`UPDATE grupos SET image_url = '' WHERE image_url IS NULL`);
+
+  await query(
+    `ALTER TABLE grupos ADD COLUMN IF NOT EXISTS notes_html TEXT NOT NULL DEFAULT ''`,
+  );
+
+  await query(`UPDATE grupos SET notes_html = '' WHERE notes_html IS NULL`);
 
   await query(`
     CREATE UNIQUE INDEX IF NOT EXISTS grupos_nome_lower_unique_idx

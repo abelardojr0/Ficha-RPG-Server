@@ -1504,6 +1504,39 @@ app.post("/api/sheets/:id/unlock", async (req, res) => {
   }
 });
 
+app.patch("/api/sheets/:id/password", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adminPassword, newPassword } = req.body ?? {};
+
+    const sheet = await getSheetById(id);
+    if (!sheet) {
+      return res.status(404).json({ message: "Ficha nao encontrada." });
+    }
+
+    if (!(await isValidMasterPassword(adminPassword))) {
+      return res.status(401).json({ message: "Senha do adm incorreta." });
+    }
+
+    if (!isStrongEnoughPassword(newPassword)) {
+      return res
+        .status(400)
+        .json({ message: "Nova senha invalida (minimo 4 caracteres)." });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword.trim(), 12);
+    await query(`UPDATE fichas SET password_hash = $2 WHERE id = $1::uuid`, [
+      id,
+      passwordHash,
+    ]);
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Falha ao resetar senha da ficha." });
+  }
+});
+
 app.put("/api/sheets/:id", async (req, res) => {
   try {
     const { id } = req.params;

@@ -73,6 +73,27 @@ const getUploadFailureMessage = (error, fallbackMessage) => {
   return `${fallbackMessage} ${detail}`;
 };
 
+const countMojibakeMarkers = (value) => {
+  const matches = String(value || "").match(/[ÃÂ�]/g);
+  return matches ? matches.length : 0;
+};
+
+const fixPossiblyMojibakeText = (value) => {
+  const text = String(value || "");
+  if (!/[ÃÂ�]/.test(text)) {
+    return text;
+  }
+
+  try {
+    const decoded = Buffer.from(text, "latin1").toString("utf8");
+    return countMojibakeMarkers(decoded) < countMojibakeMarkers(text)
+      ? decoded
+      : text;
+  } catch {
+    return text;
+  }
+};
+
 const isValidMasterPassword = async (candidatePassword) => {
   if (typeof candidatePassword !== "string" || candidatePassword.length === 0) {
     return false;
@@ -421,7 +442,7 @@ const buildGroupSummary = ({ req, group }) => {
 
 const buildGroupAttachmentSummary = (fileRow) => ({
   id: fileRow.id,
-  nome: fileRow.original_name,
+  nome: fixPossiblyMojibakeText(fileRow.original_name),
   mimeType: fileRow.mime_type,
   tamanhoBytes: Number(fileRow.size_bytes || 0),
   url: fileRow.file_url,
@@ -1007,7 +1028,7 @@ app.post("/api/groups/:id/files", (req, res) => {
         [
           fileId,
           id,
-          req.file.originalname || req.file.filename,
+          fixPossiblyMojibakeText(req.file.originalname || req.file.filename),
           fileUrl,
           req.file.mimetype || "application/octet-stream",
           req.file.size || 0,

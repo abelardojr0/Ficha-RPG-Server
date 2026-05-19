@@ -35,6 +35,7 @@ const IMAGE_MIME_WHITELIST = new Set([
 ]);
 
 const GROUP_FILE_MIME_WHITELIST = new Set([
+  ...IMAGE_MIME_WHITELIST,
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -207,15 +208,27 @@ const uploadImageToProvider = async (file) => {
   throw new Error(`Provedor de imagem nao suportado: ${IMAGE_PROVIDER}`);
 };
 
-const groupFileStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
-    const extension = path.extname(file.originalname || "").toLowerCase();
-    const safeExtension =
-      extension && extension.length <= 6 ? extension : ".bin";
-    cb(null, `${Date.now()}-${crypto.randomUUID()}${safeExtension}`);
-  },
-});
+const getSafeUploadFilename = (file) => {
+  const extension = path.extname(file?.originalname || "").toLowerCase();
+  const safeExtension = extension && extension.length <= 8 ? extension : ".bin";
+  return `${Date.now()}-${crypto.randomUUID()}${safeExtension}`;
+};
+
+const saveGroupFileToLocalUploads = async (req, file) => {
+  if (!file?.buffer || !Buffer.isBuffer(file.buffer)) {
+    throw new Error("Arquivo invalido.");
+  }
+
+  const filename = getSafeUploadFilename(file);
+  const filePath = path.resolve(uploadsDir, filename);
+
+  if (!filePath.startsWith(uploadsDir)) {
+    throw new Error("Caminho de arquivo invalido.");
+  }
+
+  await fs.promises.writeFile(filePath, file.buffer);
+  return buildPublicFileUrl(req, filename);
+};
 
 const uploadImage = multer({
   storage: multer.memoryStorage(),
@@ -233,7 +246,7 @@ const uploadImage = multer({
 });
 
 const uploadGroupFile = multer({
-  storage: groupFileStorage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 20 * 1024 * 1024,
   },
@@ -412,6 +425,7 @@ const buildGroupAttachmentSummary = (fileRow) => ({
   mimeType: fileRow.mime_type,
   tamanhoBytes: Number(fileRow.size_bytes || 0),
   url: fileRow.file_url,
+  caption: fileRow.caption || "",
   createdAt: fileRow.created_at,
 });
 
@@ -535,6 +549,7 @@ const listGroupFiles = async (groupId) => {
       file_url,
       mime_type,
       size_bytes,
+      caption,
       created_at
     FROM grupo_arquivos
     WHERE grupo_id = $1::uuid
@@ -965,9 +980,6 @@ app.post("/api/groups/:id/files", (req, res) => {
       const { id } = req.params;
       const group = await getGroupById(id);
       if (!group) {
-        if (req.file?.path) {
-          fs.rm(req.file.path, { force: true }, () => {});
-        }
         res.status(404).json({ message: "Grupo nao encontrado." });
         return;
       }
@@ -978,12 +990,19 @@ app.post("/api/groups/:id/files", (req, res) => {
       }
 
       const fileId = crypto.randomUUID();
-      const fileUrl = buildPublicFileUrl(req, req.file.filename);
+      const isImageFile = IMAGE_MIME_WHITELIST.has(req.file.mimetype);
+      const fileUrl = isImageFile
+        ? await uploadImageToProvider(req.file)
+        : await saveGroupFileToLocalUploads(req, req.file);
+      const caption =
+        typeof req.body?.caption === "string"
+          ? req.body.caption.trim().slice(0, 500)
+          : "";
 
       await query(
         `
-        INSERT INTO grupo_arquivos (id, grupo_id, original_name, file_url, mime_type, size_bytes)
-        VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6)
+        INSERT INTO grupo_arquivos (id, grupo_id, original_name, file_url, mime_type, size_bytes, caption)
+        VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)
         `,
         [
           fileId,
@@ -992,6 +1011,7 @@ app.post("/api/groups/:id/files", (req, res) => {
           fileUrl,
           req.file.mimetype || "application/octet-stream",
           req.file.size || 0,
+          caption,
         ],
       );
 
@@ -1005,10 +1025,12 @@ app.post("/api/groups/:id/files", (req, res) => {
 
     processUpload().catch((uploadProcessError) => {
       console.error(uploadProcessError);
-      if (req.file?.path) {
-        fs.rm(req.file.path, { force: true }, () => {});
-      }
-      res.status(500).json({ message: "Falha ao salvar arquivo do grupo." });
+      res.status(500).json({
+        message: getUploadFailureMessage(
+          uploadProcessError,
+          "Falha ao salvar arquivo do grupo.",
+        ),
+      });
     });
   });
 });

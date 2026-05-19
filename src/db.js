@@ -130,9 +130,14 @@ export const ensureDatabaseSchema = async () => {
       file_url TEXT NOT NULL,
       mime_type TEXT NOT NULL,
       size_bytes INTEGER NOT NULL,
+      caption TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+
+  await query(
+    `ALTER TABLE grupo_arquivos ADD COLUMN IF NOT EXISTS caption TEXT NOT NULL DEFAULT ''`,
+  );
 
   await query(`
     CREATE INDEX IF NOT EXISTS grupo_arquivos_grupo_id_idx

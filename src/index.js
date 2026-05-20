@@ -18,13 +18,16 @@ dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
-const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "12mb";
+const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "45mb";
 const ADMIN_MASTER_PASSWORD = process.env.ADMIN_MASTER_PASSWORD?.trim() || "";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const uploadsDir = path.resolve(__dirname, "../uploads");
 
 fs.mkdirSync(uploadsDir, { recursive: true });
+
+const ATTACHMENT_FILE_MAX_BYTES = 30 * 1024 * 1024;
+const ATTACHMENT_FILE_MAX_LABEL = "30MB";
 
 const IMAGE_MIME_WHITELIST = new Set([
   "image/png",
@@ -269,7 +272,7 @@ const uploadImage = multer({
 const uploadGroupFile = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 20 * 1024 * 1024,
+    fileSize: ATTACHMENT_FILE_MAX_BYTES,
   },
   fileFilter: (_req, file, cb) => {
     if (!GROUP_FILE_MIME_WHITELIST.has(file.mimetype)) {
@@ -1042,7 +1045,9 @@ app.post("/api/groups/:id/files", (req, res) => {
       ) {
         res
           .status(400)
-          .json({ message: "Arquivo muito grande. Limite: 20MB." });
+          .json({
+            message: `Arquivo muito grande. Limite: ${ATTACHMENT_FILE_MAX_LABEL}.`,
+          });
         return;
       }
 
